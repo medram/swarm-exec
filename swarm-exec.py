@@ -61,6 +61,24 @@ def exec_command(command: str, /, *, logs: bool = True):
         raise subprocess.CalledProcessError(return_code, command)
 
 
+def wait_for_command_finish(container_name):
+    """Continuously checks logs for DOCKER_SWARM_COMMAND_STATUS=1 in container logs."""
+    command = f"docker service logs {container_name} --follow"
+    process = subprocess.Popen(
+        command, shell=True, stdout=subprocess.PIPE, universal_newlines=True
+    )
+
+    for line in iter(process.stdout.readline, ""):
+        print(f"LOG: {line}", end="")
+        if "DOCKER_SWARM_COMMAND_STATUS=1" in line:
+            print("Command has finished.")
+            process.terminate()
+            break
+
+    process.stdout.close()
+    process.wait()
+
+
 def main():
     inputs = parser.parse_args()
     now = datetime.datetime.now(datetime.timezone.utc)
@@ -75,7 +93,7 @@ docker service create \
     --cap-add=ALL \
     --mount type=bind,source=/var/run/docker.sock,target=/var/run/docker.sock \
     --restart-condition none \
-    docker:cli sh -c "{inputs.command} && while true; do sleep 3600; done"
+    docker:cli sh -c "{inputs.command} ; echo DOCKER_SWARM_COMMAND_STATUS=1 && while true; do sleep 3600; done"
 """
 
     def cleanup(signum, frame):
@@ -99,11 +117,12 @@ docker service create \
     except subprocess.CalledProcessError as e:
         print(e)
 
-    # Output the container logs asynchronously if requested
+    # Check the container logs until DOCKER_SWARM_COMMAND_STATUS=1 is detected
     if inputs.logs:
-        print(f"Logs for container: {container_name}")
-        exec_command(f"docker service logs {container_name}")
+        print(f"Waiting for command to finish in container: {container_name}")
+        wait_for_command_finish(container_name)
 
+    # Remove the container if specified
     if inputs.rm:
         time.sleep(1)
         print(f"Removing container: {container_name}")
