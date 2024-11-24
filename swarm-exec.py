@@ -18,9 +18,6 @@ parser.add_argument(
     "--rm", action="store_true", help="Remove the container after execution."
 )
 parser.add_argument(
-    "-v", "--verbose", action="store_true", help="Enable verbose output."
-)
-parser.add_argument(
     "--logs", action="store_true", help="Show the logs of the container."
 )
 parser.add_argument("command", type=str, help="Command to execute on swarm nodes.")
@@ -31,25 +28,36 @@ parser.add_argument(
     default="global",
     help="Mode of the service.",
 )
+parser.add_argument(
+    "-q", "--quiet", action="store_true", help="Do not print the command template."
+)
+parser.add_argument(
+    "-v", "--verbose", action="store_true", help="Enable verbose output."
+)
 
 
-def exec_command(command: str, /, *, logs: bool = True):
+def exec_command(command: str, /, *, print_output: bool = True) -> str:
     """Run a command asynchronously, returning output or error lines."""
     process = subprocess.Popen(
         command,
         shell=True,
-        stdout=subprocess.PIPE if logs else None,
-        stderr=subprocess.PIPE if logs else None,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         universal_newlines=True,
     )
 
+    output: str = ""
+
     def stream_output(pipe, prefix):
         """Stream output from stdout or stderr asynchronously."""
+        nonlocal output
+
         for line in iter(pipe.readline, ""):
+            output += line
             print(f"{prefix}: {line}", end="")
         pipe.close()
 
-    if logs:
+    if print_output:
         if process.stdout:
             threading.Thread(target=stream_output, args=(process.stdout, "OUT")).start()
         if process.stderr:
@@ -59,6 +67,8 @@ def exec_command(command: str, /, *, logs: bool = True):
     return_code = process.wait()
     if return_code != 0:
         raise subprocess.CalledProcessError(return_code, command)
+
+    return output
 
 
 def number_of_replicas(service_name: str) -> int:
@@ -72,7 +82,7 @@ def number_of_replicas(service_name: str) -> int:
     )
 
 
-def wait_for_command_finish(container_name: str, /, *, logs: bool = True) -> None:
+def output_container_logs(container_name: str, /, *, logs: bool = True) -> None:
     """Continuously checks logs for DOCKER_SWARM_COMMAND_STATUS=1 in container logs."""
     command = f"docker service logs {container_name} --follow"
     process = subprocess.Popen(
@@ -121,7 +131,9 @@ docker service create \
         """Cleanup function called on SIGINT and SIGTERM signals."""
         if inputs.verbose:
             print("Cleaning up...")
-        exec_command(f"docker service rm {container_name}", logs=inputs.logs)
+        exec_command(
+            f"docker service rm {container_name}", print_output=not inputs.quiet
+        )
         exit(0)
 
     signal.signal(signal.SIGINT, cleanup)
@@ -136,7 +148,7 @@ docker service create \
 
     try:
         # Run the command template asynchronously
-        exec_command(command_template, logs=inputs.logs)
+        exec_command(command_template, print_output=not inputs.quiet)
     except subprocess.CalledProcessError as e:
         print(e)
 
@@ -144,14 +156,16 @@ docker service create \
     if inputs.logs:
         if inputs.verbose:
             print(f"Waiting for command to finish in container: {container_name}")
-        wait_for_command_finish(container_name, logs=inputs.logs)
+        output_container_logs(container_name, logs=inputs.logs)
 
     # Remove the container if specified
     if inputs.rm:
         time.sleep(1)
         if inputs.verbose:
             print(f"Removing container: {container_name}")
-        exec_command(f"docker service rm {container_name}", logs=inputs.logs)
+        exec_command(
+            f"docker service rm {container_name}", print_output=not inputs.quiet
+        )
 
 
 if __name__ == "__main__":
