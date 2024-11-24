@@ -72,7 +72,7 @@ def number_of_replicas(service_name: str) -> int:
     )
 
 
-def wait_for_command_finish(container_name: str) -> None:
+def wait_for_command_finish(container_name: str, /, *, logs: bool = True) -> None:
     """Continuously checks logs for DOCKER_SWARM_COMMAND_STATUS=1 in container logs."""
     command = f"docker service logs {container_name} --follow"
     process = subprocess.Popen(
@@ -86,11 +86,11 @@ def wait_for_command_finish(container_name: str) -> None:
         for line in iter(process.stdout.readline, ""):
             if f"DOCKER_SWARM_COMMAND_STATUS=1" in line:
                 finished += 1
-            else:
+            elif logs:
                 print(f"LOG: {line}", end="")
 
             if finished >= replicas:
-                print("Command has finished.")
+                print("Command finished.")
                 process.terminate()
                 break
 
@@ -119,18 +119,20 @@ docker service create \
     # Register the cleanup function.
     def cleanup(signum, frame):
         """Cleanup function called on SIGINT and SIGTERM signals."""
-        print("Cleaning up...")
+        if inputs.verbose:
+            print("Cleaning up...")
         exec_command(f"docker service rm {container_name}", logs=inputs.logs)
         exit(0)
 
     signal.signal(signal.SIGINT, cleanup)
     signal.signal(signal.SIGTERM, cleanup)
 
-    print("#" * 80)
-    print(f"Executing command: {inputs.command}")
-    print("#" * 80)
-    print(f"Template command:\n{command_template}", end="")
-    print("#" * 80)
+    if inputs.verbose:
+        print("#" * 80)
+        print(f"Executing command: {inputs.command}")
+        print("#" * 80)
+        print(f"Template command:\n{command_template}", end="")
+        print("#" * 80)
 
     try:
         # Run the command template asynchronously
@@ -140,13 +142,15 @@ docker service create \
 
     # Check the container logs until DOCKER_SWARM_COMMAND_STATUS=1 is detected
     if inputs.logs:
-        print(f"Waiting for command to finish in container: {container_name}")
-        wait_for_command_finish(container_name)
+        if inputs.verbose:
+            print(f"Waiting for command to finish in container: {container_name}")
+        wait_for_command_finish(container_name, logs=inputs.logs)
 
     # Remove the container if specified
     if inputs.rm:
         time.sleep(1)
-        print(f"Removing container: {container_name}")
+        if inputs.verbose:
+            print(f"Removing container: {container_name}")
         exec_command(f"docker service rm {container_name}", logs=inputs.logs)
 
 
