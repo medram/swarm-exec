@@ -61,21 +61,41 @@ def exec_command(command: str, /, *, logs: bool = True):
         raise subprocess.CalledProcessError(return_code, command)
 
 
-def wait_for_command_finish(container_name):
+def number_of_replicas(service_name: str) -> int:
+    return int(
+        subprocess.check_output(
+            'docker service ls --filter "name=%s" --filter "mode=global" --format "{{.Replicas}}" | cut -d"/" -f2'
+            % service_name,
+            shell=True,
+            universal_newlines=True,
+        )
+    )
+
+
+def wait_for_command_finish(container_name: str) -> None:
     """Continuously checks logs for DOCKER_SWARM_COMMAND_STATUS=1 in container logs."""
     command = f"docker service logs {container_name} --follow"
     process = subprocess.Popen(
         command, shell=True, stdout=subprocess.PIPE, universal_newlines=True
     )
 
-    for line in iter(process.stdout.readline, ""):
-        print(f"LOG: {line}", end="")
-        if "DOCKER_SWARM_COMMAND_STATUS=1" in line:
-            print("Command has finished.")
-            process.terminate()
-            break
+    finished: int = 0
 
-    process.stdout.close()
+    replicas = number_of_replicas(container_name)
+    if process.stdout:
+        for line in iter(process.stdout.readline, ""):
+            if f"DOCKER_SWARM_COMMAND_STATUS=1" in line:
+                finished += 1
+            else:
+                print(f"LOG: {line}", end="")
+
+            if finished >= replicas:
+                print("Command has finished.")
+                process.terminate()
+                break
+
+        process.stdout.close()
+
     process.wait()
 
 
@@ -96,6 +116,7 @@ docker service create \
     docker:cli sh -c "{inputs.command} ; echo DOCKER_SWARM_COMMAND_STATUS=1 && while true; do sleep 3600; done"
 """
 
+    # Register the cleanup function.
     def cleanup(signum, frame):
         """Cleanup function called on SIGINT and SIGTERM signals."""
         print("Cleaning up...")
